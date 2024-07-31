@@ -1,0 +1,17 @@
+version: '3.3'
+services:
+  app:
+    container_name: jasmine-service
+    image: mseptiaan/jasmine:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: ".env"
+    volumes:
+      - 'cache:/opt/apps/cache'
+    ports:
+      - 8080:8080
+    network_mode: bridge
+volumes:
+  cache:
+    external: true

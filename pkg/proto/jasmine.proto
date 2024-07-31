@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+option go_package = "github.com/mseptiaan/jasmine/internal/pb";
+import "google/api/annotations.proto";
+
+service JasmineEndpoint {
+  rpc GetData(RequestGet) returns (ResponseGet) {
+    option (google.api.http) = {
+      get: "/get/{bucket}"
+    };
+  }
+  rpc GetDataGeoJson(RequestGet) returns (ResponseGetGeoJson) {
+    option (google.api.http) = {
+      get: "/get/{bucket}/geojson"
+    };
+  }
+
+  rpc PostNearby (RequestNearby) returns (ResponseNearby) {
+    option (google.api.http) = {
+      post: "/nearby"
+      body: "*"
+    };
+  }
+
+  rpc PostStore (RequestStore) returns (ResponseStore) {
+    option (google.api.http) = {
+      post: "/store"
+      body: "*"
+    };
+  }
+}
+
+message ResponseGetGeoJson {
+
+  message Properties {
+    string markercolor = 1 [json_name = "marker-color"];
+    string markersize = 2 [json_name = "marker-size"];
+    string markersymbol = 3 [json_name = "marker-symbol"];
+  }
+
+  message Geometry {
+    repeated double coordinates = 1;
+    string type = 2;
+  }
+
+  message Features {
+    string type = 1;
+    Properties properties = 2;
+    Geometry geometry = 3;
+    uint32 id = 4;
+  }
+
+  string type = 1;
+  repeated Features features = 2;
+}
+
+message RequestGet {
+  string bucket = 1;
+}
+
+message ResponseGet {
+  repeated Riders riders = 1;
+}
+
+message Riders {
+  string rider_id = 1;
+  double latitude = 2;
+  double longitude = 3;
+}
+
+message RequestNearby {
+  string bucket = 1; // @gotags: validate:"required"
+  double latitude = 2; // @gotags: validate:"required,latitude"
+  double longitude = 3; // @gotags: validate:"required,longitude"
+  uint32 limit = 4;
+}
+
+message ResponseNearby {
+  repeated RidersNearby rider = 1;
+}
+
+message RidersNearby {
+  string rider_id = 1;
+  double latitude = 2;
+  double longitude = 3;
+  double distance = 4;
+}
+
+
+message RequestStore {
+  string bucket = 1; // @gotags: validate:"required"
+  string rider_id = 2; // @gotags: validate:"required"
+  double latitude = 3; // @gotags: validate:"required,latitude"
+  double longitude = 4; // @gotags: validate:"required,longitude"
+}
+
+message ResponseStore {
+  string status = 1;
+}
