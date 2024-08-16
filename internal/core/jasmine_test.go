@@ -133,7 +133,7 @@ func TestStoreCacheToFile(t *testing.T) {
 	}
 	j.PostStore(context.Background(), req)
 	filename := "test_cache.json"
-	j.storeCacheToFile(filename)
+	j.backupCache(filename)
 	defer os.Remove(filename)
 	_, err := os.Stat(filename)
 	assert.NoError(t, err)
@@ -146,7 +146,7 @@ func TestLoadCacheFromFile(t *testing.T) {
 	defer os.Remove(filename)
 	defer file.Close()
 	file.WriteString(`{"test_bucket":{"Driver":{},"LastUpdate":"2023-01-01T00:00:00Z"}}`)
-	j.loadCacheFromFile(filename)
+	j.restoreCache(filename)
 	assert.Contains(t, j.cache, "test_bucket")
 }
 

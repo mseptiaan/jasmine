@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -28,7 +29,7 @@ type Jasmine struct {
 func New(test bool) *Jasmine {
 	j := &Jasmine{cache: make(map[string]*CargoData), validate: NewValidator()}
 	if !test {
-		j.loadCacheFromFile(os.Getenv("CACHE_FILE"))
+		j.restoreCache(os.Getenv("CACHE_FILE"))
 		go j.startCacheStoreInterval()
 	}
 	return j
@@ -58,9 +59,8 @@ func (j *Jasmine) PostStore(ctx context.Context, req *pb.RequestStore) (*pb.Resp
 
 func (j *Jasmine) GetData(ctx context.Context, req *pb.RequestGet) (*pb.ResponseGet, error) {
 	j.mu.RLock()
-	defer j.mu.RUnlock()
-
 	data, exists := j.cache[req.Bucket]
+	j.mu.RUnlock()
 	if !exists {
 		return &pb.ResponseGet{}, nil
 	}
@@ -76,9 +76,8 @@ func (j *Jasmine) GetData(ctx context.Context, req *pb.RequestGet) (*pb.Response
 
 func (j *Jasmine) GetDataGeoJson(ctx context.Context, req *pb.RequestGet) (*pb.ResponseGetGeoJson, error) {
 	j.mu.RLock()
-	defer j.mu.RUnlock()
-
 	data, exists := j.cache[req.Bucket]
+	j.mu.RUnlock()
 	if !exists {
 		return &pb.ResponseGetGeoJson{}, nil
 	}
@@ -108,64 +107,76 @@ func (j *Jasmine) PostNearby(ctx context.Context, req *pb.RequestNearby) (*pb.Re
 	if err := j.validate.Struct(req); err != nil {
 		return nil, errors.New("validation error")
 	}
-	j.mu.RLock()
-	defer j.mu.RUnlock()
 
+	j.mu.RLock()
 	data, exists := j.cache[req.Bucket]
+	j.mu.RUnlock()
+
 	if !exists {
 		return &pb.ResponseNearby{}, nil
 	}
 
-	data.LastUpdate = time.Now()
 	neighbors := data.Driver.KNearestNeighbors(&Point{Latitude: req.Latitude, Longitude: req.Longitude}, int(req.Limit))
 	riders := make([]*pb.RidersNearby, len(neighbors))
 	for i, p := range neighbors {
 		riders[i] = &pb.RidersNearby{RiderId: p.ID, Latitude: p.Latitude, Longitude: p.Longitude, Distance: p.Distance}
 	}
+
 	return &pb.ResponseNearby{Rider: riders}, nil
 }
 
 func (j *Jasmine) startCacheStoreInterval() {
-	ticker := time.NewTicker(10 * time.Second)
+	cacheDuration, err := strconv.Atoi(os.Getenv("DURATION_BACKUP_RESTORE_CACHE"))
+	if err != nil {
+		cacheDuration = 60
+	}
+	ticker := time.NewTicker(time.Duration(cacheDuration) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		j.storeCacheToFile(os.Getenv("CACHE_FILE"))
+		errBackup := j.backupCache(os.Getenv("CACHE_FILE"))
+		if err != nil {
+			panic(errBackup)
+		}
 		j.removeOldCacheEntries()
 	}
 }
 
-func (j *Jasmine) storeCacheToFile(filename string) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
+func (j *Jasmine) backupCache(filename string) error {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
 
 	file, err := os.Create(filename)
 	if err != nil {
-		return
+		return err
 	}
 	defer file.Close()
 
-	json.NewEncoder(file).Encode(j.cache)
+	return json.NewEncoder(file).Encode(j.cache)
 }
 
-func (j *Jasmine) loadCacheFromFile(filename string) {
+func (j *Jasmine) restoreCache(filename string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
 	file, err := os.Open(filename)
 	if err != nil {
-		return
+		return err
 	}
 	defer file.Close()
 
-	json.NewDecoder(file).Decode(&j.cache)
+	return json.NewDecoder(file).Decode(&j.cache)
 }
 
 func (j *Jasmine) removeOldCacheEntries() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	purgeDuration, err := strconv.Atoi(os.Getenv("DURATION_PURGE_CACHE"))
+	if err != nil {
+		purgeDuration = 720
+	}
+	oneMonthAgo := time.Now().Add(-time.Duration(purgeDuration) * time.Hour)
 
-	oneMonthAgo := time.Now().AddDate(0, -1, 0)
 	for key, data := range j.cache {
 		if data.LastUpdate.Before(oneMonthAgo) {
 			delete(j.cache, key)

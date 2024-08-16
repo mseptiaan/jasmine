@@ -72,9 +72,10 @@ func updatePointByID(node *Node, id string, newPoint *Point, depth int, updated 
 	}
 
 	if node.Point.ID == id {
-		node.Point = newPoint
 		*updated = true
-		return node
+		points := collectPoints(node)
+		points[0] = newPoint // Replace the point with the new one
+		return buildKDTree(points, depth)
 	}
 
 	if (depth%2 == 0 && newPoint.Longitude < node.Point.Longitude) || (depth%2 == 1 && newPoint.Latitude < node.Point.Latitude) {
@@ -125,5 +126,37 @@ func knnSearch(node *Node, center *Point, k int, depth int, result *[]*Point) {
 	} else {
 		knnSearch(node.Right, center, k, depth+1, result)
 		knnSearch(node.Left, center, k, depth+1, result)
+	}
+}
+
+func collectPoints(node *Node) []*Point {
+	if node == nil {
+		return nil
+	}
+	points := []*Point{node.Point}
+	points = append(points, collectPoints(node.Left)...)
+	points = append(points, collectPoints(node.Right)...)
+	return points
+}
+
+func buildKDTree(points []*Point, depth int) *Node {
+	if len(points) == 0 {
+		return nil
+	}
+
+	axis := depth % 2
+	sort.Slice(points, func(i, j int) bool {
+		if axis == 0 {
+			return points[i].Longitude < points[j].Longitude
+		}
+		return points[i].Latitude < points[j].Latitude
+	})
+
+	median := len(points) / 2
+	return &Node{
+		Point: points[median],
+		Left:  buildKDTree(points[:median], depth+1),
+		Right: buildKDTree(points[median+1:], depth+1),
+		Axis:  axis,
 	}
 }
