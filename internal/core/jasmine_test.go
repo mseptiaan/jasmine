@@ -38,7 +38,7 @@ func TestPostStore_UpdateExistingBucket(t *testing.T) {
 	resp, err := j.PostStore(context.Background(), req)
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", resp.Status)
-	assert.Equal(t, 23.45, j.cache["existing_bucket"].Driver.ListPoints()[0].Latitude)
+	assert.Equal(t, 23.45, j.cache["existing_bucket"].GetAllRiders()[0].Latitude)
 }
 
 func TestGetData_ExistingBucket(t *testing.T) {
@@ -152,8 +152,8 @@ func TestLoadCacheFromFile(t *testing.T) {
 
 func TestRemoveOldCacheEntries(t *testing.T) {
 	j := New(true)
-	j.cache["old_bucket"] = &CargoData{LastUpdate: time.Now().AddDate(0, -2, 0)}
-	j.cache["new_bucket"] = &CargoData{LastUpdate: time.Now()}
+	j.cache["old_bucket"] = &KDTree{LastUpdate: time.Now().AddDate(0, -2, 0)}
+	j.cache["new_bucket"] = &KDTree{LastUpdate: time.Now()}
 	j.removeOldCacheEntries()
 	assert.NotContains(t, j.cache, "old_bucket")
 	assert.Contains(t, j.cache, "new_bucket")

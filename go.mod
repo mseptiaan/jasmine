@@ -7,6 +7,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0
 	github.com/joho/godotenv v1.5.1
 	github.com/stretchr/testify v1.9.0
+	github.com/subchen/go-trylock/v2 v2.0.0
 	github.com/useinsider/go-pkg v0.10.2
 	google.golang.org/genproto/googleapis/api v0.0.0-20240723171418-e6d459c13d2a
 	google.golang.org/grpc v1.65.0

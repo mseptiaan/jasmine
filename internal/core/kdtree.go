@@ -1,162 +1,233 @@
 package core
 
 import (
+	"github.com/mseptiaan/jasmine/internal/pb"
 	"os"
 	"sort"
+	"sync"
+	"time"
 )
 
-type KDTree struct {
-	Root *Node
-}
-
 type Node struct {
-	Point *Point
+	Point *pb.RidersNearby
 	Left  *Node
 	Right *Node
 	Axis  int
 }
 
-type Point struct {
-	ID        string
-	Latitude  float64
-	Longitude float64
-	Distance  float64
+type KDTree struct {
+	Name       string
+	Root       *Node
+	LastUpdate time.Time
+	mu         sync.RWMutex
 }
 
-func NewKDTree() *KDTree {
-	return &KDTree{}
+func NewKDTree(name string) *KDTree {
+	return &KDTree{Name: name}
 }
 
-func (tree *KDTree) ListPoints() []*Point {
-	var points []*Point
-	listPoints(tree.Root, &points)
-	return points
+func (tree *KDTree) Insert(rider *pb.RidersNearby) {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	tree.Root = insert(tree.Root, rider, 0)
 }
 
-func listPoints(node *Node, points *[]*Point) {
+func insert(node *Node, rider *pb.RidersNearby, depth int) *Node {
 	if node == nil {
-		return
-	}
-	*points = append(*points, node.Point)
-	listPoints(node.Left, points)
-	listPoints(node.Right, points)
-}
-
-func (tree *KDTree) AddPoint(point *Point) {
-	tree.Root = addPoint(tree.Root, point, 0)
-}
-
-func addPoint(node *Node, point *Point, depth int) *Node {
-	if node == nil {
-		return &Node{Point: point, Axis: depth % 2}
+		return &Node{Point: rider, Axis: depth % 2}
 	}
 
-	if (depth%2 == 0 && point.Longitude < node.Point.Longitude) || (depth%2 == 1 && point.Latitude < node.Point.Latitude) {
-		node.Left = addPoint(node.Left, point, depth+1)
+	if depth%2 == 0 {
+		if rider.Latitude < node.Point.Latitude {
+			node.Left = insert(node.Left, rider, depth+1)
+		} else {
+			node.Right = insert(node.Right, rider, depth+1)
+		}
 	} else {
-		node.Right = addPoint(node.Right, point, depth+1)
+		if rider.Longitude < node.Point.Longitude {
+			node.Left = insert(node.Left, rider, depth+1)
+		} else {
+			node.Right = insert(node.Right, rider, depth+1)
+		}
 	}
-
 	return node
 }
 
-func (tree *KDTree) UpdatePointByID(id string, newPoint *Point) bool {
-	updated := false
-	tree.Root = updatePointByID(tree.Root, id, newPoint, 0, &updated)
-	return updated
+func (tree *KDTree) Update(rider *pb.RidersNearby) {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	tree.Root = update(tree.Root, rider, 0)
 }
 
-func updatePointByID(node *Node, id string, newPoint *Point, depth int, updated *bool) *Node {
+func update(node *Node, rider *pb.RidersNearby, depth int) *Node {
 	if node == nil {
 		return nil
 	}
 
-	if node.Point.ID == id {
-		*updated = true
-		points := collectPoints(node)
-		points[0] = newPoint // Replace the point with the new one
-		return buildKDTree(points, depth)
+	if node.Point.RiderId == rider.RiderId {
+		node.Point = rider
+		return node
 	}
 
-	if (depth%2 == 0 && newPoint.Longitude < node.Point.Longitude) || (depth%2 == 1 && newPoint.Latitude < node.Point.Latitude) {
-		node.Left = updatePointByID(node.Left, id, newPoint, depth+1, updated)
+	if depth%2 == 0 {
+		if rider.Latitude < node.Point.Latitude {
+			node.Left = update(node.Left, rider, depth+1)
+		} else {
+			node.Right = update(node.Right, rider, depth+1)
+		}
 	} else {
-		node.Right = updatePointByID(node.Right, id, newPoint, depth+1, updated)
+		if rider.Longitude < node.Point.Longitude {
+			node.Left = update(node.Left, rider, depth+1)
+		} else {
+			node.Right = update(node.Right, rider, depth+1)
+		}
 	}
-
 	return node
 }
 
-func (tree *KDTree) KNearestNeighbors(center *Point, k int) []*Point {
-	var result []*Point
-	knnSearch(tree.Root, center, k, 0, &result)
+func (tree *KDTree) SearchNearby(lat, long, radius float64) []*pb.RidersNearby {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+	var results []*pb.RidersNearby
+	searchNearby(tree.Root, lat, long, radius, 0, &results)
+	return results
+}
+
+func searchNearby(node *Node, lat, long, radius float64, depth int, results *[]*pb.RidersNearby) {
+	if node == nil {
+		return
+	}
+
+	distance := haversine(lat, long, node.Point.Latitude, node.Point.Longitude)
+	if distance <= radius {
+		node.Point.Distance = distance // Set the distance
+		*results = append(*results, node.Point)
+	}
+
+	if depth%2 == 0 {
+		if lat-radius < node.Point.Latitude {
+			searchNearby(node.Left, lat, long, radius, depth+1, results)
+		}
+		if lat+radius >= node.Point.Latitude {
+			searchNearby(node.Right, lat, long, radius, depth+1, results)
+		}
+	} else {
+		if long-radius < node.Point.Longitude {
+			searchNearby(node.Left, lat, long, radius, depth+1, results)
+		}
+		if long+radius >= node.Point.Longitude {
+			searchNearby(node.Right, lat, long, radius, depth+1, results)
+		}
+	}
+}
+
+func haversine(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371 // Earth radius in kilometers
+	dLat := (lat2 - lat1) * (3.141592653589793 / 180.0)
+	dLon := (lon2 - lon1) * (3.141592653589793 / 180.0)
+	a := 0.5 - (0.5 * (1 - (dLat*dLat/2 + dLon*dLon/2)))
+	return R * 2 * (1 - a)
+}
+
+func (tree *KDTree) GetAllRiders() []*pb.RidersNearby {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+	var riders []*pb.RidersNearby
+	collectRiders(tree.Root, &riders)
+	return riders
+}
+
+func collectRiders(node *Node, riders *[]*pb.RidersNearby) {
+	if node == nil {
+		return
+	}
+	*riders = append(*riders, node.Point)
+	collectRiders(node.Left, riders)
+	collectRiders(node.Right, riders)
+}
+
+func (tree *KDTree) FindRiderByID(id string) *pb.RidersNearby {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+	return findRiderByID(tree.Root, id)
+}
+
+func findRiderByID(node *Node, id string) *pb.RidersNearby {
+	if node == nil {
+		return nil
+	}
+	if node.Point.RiderId == id {
+		return node.Point
+	}
+	leftResult := findRiderByID(node.Left, id)
+	if leftResult != nil {
+		return leftResult
+	}
+	return findRiderByID(node.Right, id)
+}
+
+func (tree *KDTree) Rebuild() {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	var riders []*pb.RidersNearby
+	collectRiders(tree.Root, &riders)
+	tree.Root = nil
+	for _, rider := range riders {
+		tree.Root = insert(tree.Root, rider, 0)
+	}
+}
+
+func (tree *KDTree) SearchNearbyWithLimit(lat, long float64, limit int) []*pb.RidersNearby {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+	var results []*pb.RidersNearby
+	searchNearbyWithLimit(tree.Root, lat, long, limit, 0, &results)
 
 	var distanceResult []float64
 	if os.Getenv("ENGINE") == "OSRM" {
-		distanceResult, _, _ = OSRM(result, center.Latitude, center.Longitude)
+		distanceResult, _, _ = OSRM(results, lat, long)
 	}
 
-	for i := range result {
+	for i := range results {
 		switch os.Getenv("ENGINE") {
 		case "OSRM":
-			result[i].Distance = distanceResult[i+1]
+			results[i].Distance = distanceResult[i+1]
 		case "HAVERSINE":
 		default:
-			result[i].Distance = Haversine(center.Latitude, center.Longitude, result[i].Latitude, result[i].Longitude)
+			results[i].Distance = Haversine(lat, long, results[i].Latitude, results[i].Longitude)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Distance < result[j].Distance
-	})
 
-	if len(result) > k {
-		return result[:k]
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Distance < results[j].Distance
+	})
+	if len(results) > limit {
+		results = results[:limit]
 	}
-	return result
+	return results
 }
 
-func knnSearch(node *Node, center *Point, k int, depth int, result *[]*Point) {
+func searchNearbyWithLimit(node *Node, lat, long float64, limit int, depth int, results *[]*pb.RidersNearby) {
 	if node == nil {
 		return
 	}
-	*result = append(*result, node.Point)
-	if (depth%2 == 0 && center.Longitude < node.Point.Longitude) || (depth%2 == 1 && center.Latitude < node.Point.Latitude) {
-		knnSearch(node.Left, center, k, depth+1, result)
-		knnSearch(node.Right, center, k, depth+1, result)
-	} else {
-		knnSearch(node.Right, center, k, depth+1, result)
-		knnSearch(node.Left, center, k, depth+1, result)
-	}
-}
+	*results = append(*results, node.Point)
 
-func collectPoints(node *Node) []*Point {
-	if node == nil {
-		return nil
-	}
-	points := []*Point{node.Point}
-	points = append(points, collectPoints(node.Left)...)
-	points = append(points, collectPoints(node.Right)...)
-	return points
-}
-
-func buildKDTree(points []*Point, depth int) *Node {
-	if len(points) == 0 {
-		return nil
-	}
-
-	axis := depth % 2
-	sort.Slice(points, func(i, j int) bool {
-		if axis == 0 {
-			return points[i].Longitude < points[j].Longitude
+	if depth%2 == 0 {
+		if lat < node.Point.Latitude {
+			searchNearbyWithLimit(node.Left, lat, long, limit, depth+1, results)
+			searchNearbyWithLimit(node.Right, lat, long, limit, depth+1, results)
+		} else {
+			searchNearbyWithLimit(node.Right, lat, long, limit, depth+1, results)
+			searchNearbyWithLimit(node.Left, lat, long, limit, depth+1, results)
 		}
-		return points[i].Latitude < points[j].Latitude
-	})
-
-	median := len(points) / 2
-	return &Node{
-		Point: points[median],
-		Left:  buildKDTree(points[:median], depth+1),
-		Right: buildKDTree(points[median+1:], depth+1),
-		Axis:  axis,
+	} else {
+		if long < node.Point.Longitude {
+			searchNearbyWithLimit(node.Left, lat, long, limit, depth+1, results)
+			searchNearbyWithLimit(node.Right, lat, long, limit, depth+1, results)
+		} else {
+			searchNearbyWithLimit(node.Right, lat, long, limit, depth+1, results)
+			searchNearbyWithLimit(node.Left, lat, long, limit, depth+1, results)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/mseptiaan/jasmine/internal/pb"
 	"github.com/useinsider/go-pkg/insrequester"
 	"io"
 	"os"
@@ -29,7 +30,7 @@ type OSRMTable struct {
 	} `json:"sources"`
 }
 
-func OSRM(drivers []*Point, Latitude, Longitude float64) (distances []float64, durations []float64, err error) {
+func OSRM(drivers []*pb.RidersNearby, Latitude, Longitude float64) (distances []float64, durations []float64, err error) {
 	requester := insrequester.NewRequester()
 	retryConfig := insrequester.RetryConfig{
 		WaitBase: time.Second,

@@ -4,30 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/go-playground/validator/v10"
+	_ "github.com/joho/godotenv/autoload"
+	"github.com/mseptiaan/jasmine/internal/pb"
 	"os"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/go-playground/validator/v10"
-	_ "github.com/joho/godotenv/autoload"
-	"github.com/mseptiaan/jasmine/internal/pb"
 )
-
-type CargoData struct {
-	Driver     *KDTree
-	LastUpdate time.Time
-}
 
 type Jasmine struct {
 	mu    sync.RWMutex
-	cache map[string]*CargoData
+	cache map[string]*KDTree
 	pb.UnimplementedJasmineEndpointServer
 	validate *validator.Validate
 }
 
 func New(test bool) *Jasmine {
-	j := &Jasmine{cache: make(map[string]*CargoData), validate: NewValidator()}
+	j := &Jasmine{cache: make(map[string]*KDTree), validate: NewValidator()}
 	if !test {
 		j.restoreCache(os.Getenv("CACHE_FILE"))
 		go j.startCacheStoreInterval()
@@ -39,87 +33,86 @@ func (j *Jasmine) PostStore(ctx context.Context, req *pb.RequestStore) (*pb.Resp
 	if err := j.validate.Struct(req); err != nil {
 		return nil, errors.New("validation error")
 	}
+	name := req.Bucket
+	j.mu.RLock()
+	tree, exists := j.cache[name]
+	if !exists {
+		tree = NewKDTree(name)
+		j.cache[name] = tree
+	}
+	j.mu.RUnlock()
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
-
-	data, exists := j.cache[req.Bucket]
-	if exists {
-		if !data.Driver.UpdatePointByID(req.RiderId, &Point{ID: req.RiderId, Latitude: req.Latitude, Longitude: req.Longitude}) {
-			data.Driver.AddPoint(&Point{ID: req.RiderId, Latitude: req.Latitude, Longitude: req.Longitude})
-		}
-		data.LastUpdate = time.Now()
+	existingRider := tree.FindRiderByID(req.RiderId)
+	if existingRider != nil {
+		existingRider.Latitude = req.Latitude
+		existingRider.Longitude = req.Longitude
+		tree.Rebuild()
 	} else {
-		tree := NewKDTree()
-		tree.AddPoint(&Point{ID: req.RiderId, Latitude: req.Latitude, Longitude: req.Longitude})
-		j.cache[req.Bucket] = &CargoData{Driver: tree, LastUpdate: time.Now()}
+		tree.Insert(&pb.RidersNearby{RiderId: req.RiderId, Latitude: req.Latitude, Longitude: req.Longitude})
 	}
+	j.cache[name].LastUpdate = time.Now()
 	return &pb.ResponseStore{Status: "OK"}, nil
 }
 
 func (j *Jasmine) GetData(ctx context.Context, req *pb.RequestGet) (*pb.ResponseGet, error) {
 	j.mu.RLock()
-	data, exists := j.cache[req.Bucket]
+	tree, exists := j.cache[req.Bucket]
 	j.mu.RUnlock()
 	if !exists {
-		return &pb.ResponseGet{}, nil
+		return &pb.ResponseGet{Riders: nil}, nil
 	}
-
-	data.LastUpdate = time.Now()
-	points := data.Driver.ListPoints()
+	points := tree.GetAllRiders()
 	riders := make([]*pb.Riders, len(points))
 	for i, p := range points {
-		riders[i] = &pb.Riders{RiderId: p.ID, Latitude: p.Latitude, Longitude: p.Longitude}
+		riders[i] = &pb.Riders{RiderId: p.GetRiderId(), Latitude: p.GetLatitude(), Longitude: p.GetLongitude()}
 	}
 	return &pb.ResponseGet{Riders: riders}, nil
 }
 
 func (j *Jasmine) GetDataGeoJson(ctx context.Context, req *pb.RequestGet) (*pb.ResponseGetGeoJson, error) {
-	j.mu.RLock()
-	data, exists := j.cache[req.Bucket]
-	j.mu.RUnlock()
-	if !exists {
-		return &pb.ResponseGetGeoJson{}, nil
-	}
-
-	data.LastUpdate = time.Now()
-	points := data.Driver.ListPoints()
-	features := make([]*pb.ResponseGetGeoJson_Features, len(points))
-	for i, p := range points {
-		features[i] = &pb.ResponseGetGeoJson_Features{
-			Type: "Feature",
-			Properties: &pb.ResponseGetGeoJson_Properties{
-				Markercolor:  "#e81515",
-				Markersize:   "medium",
-				Markersymbol: "circle",
-			},
-			Geometry: &pb.ResponseGetGeoJson_Geometry{
-				Coordinates: []float64{p.Longitude, p.Latitude},
-				Type:        "Point",
-			},
-			Id: uint32(i),
-		}
-	}
-	return &pb.ResponseGetGeoJson{Features: features}, nil
+	//j.mu.RLock()
+	//data, exists := j.cache[req.Bucket]
+	//j.mu.RUnlock()
+	//if !exists {
+	//	return &pb.ResponseGetGeoJson{}, nil
+	//}
+	//
+	//data.LastUpdate = time.Now()
+	//points := data.Driver.ListPoints()
+	//features := make([]*pb.ResponseGetGeoJson_Features, len(points))
+	//for i, p := range points {
+	//	features[i] = &pb.ResponseGetGeoJson_Features{
+	//		Type: "Feature",
+	//		Properties: &pb.ResponseGetGeoJson_Properties{
+	//			Markercolor:  "#e81515",
+	//			Markersize:   "medium",
+	//			Markersymbol: "circle",
+	//		},
+	//		Geometry: &pb.ResponseGetGeoJson_Geometry{
+	//			Coordinates: []float64{p.Longitude, p.Latitude},
+	//			Type:        "Point",
+	//		},
+	//		Id: uint32(i),
+	//	}
+	//}
+	return &pb.ResponseGetGeoJson{Features: nil}, nil
 }
 
 func (j *Jasmine) PostNearby(ctx context.Context, req *pb.RequestNearby) (*pb.ResponseNearby, error) {
-	if err := j.validate.Struct(req); err != nil {
-		return nil, errors.New("validation error")
-	}
-
+	name := req.Bucket
 	j.mu.RLock()
-	data, exists := j.cache[req.Bucket]
+	tree, exists := j.cache[name]
 	j.mu.RUnlock()
-
 	if !exists {
-		return &pb.ResponseNearby{}, nil
+		return &pb.ResponseNearby{Rider: nil}, nil
 	}
 
-	neighbors := data.Driver.KNearestNeighbors(&Point{Latitude: req.Latitude, Longitude: req.Longitude}, int(req.Limit))
-	riders := make([]*pb.RidersNearby, len(neighbors))
-	for i, p := range neighbors {
-		riders[i] = &pb.RidersNearby{RiderId: p.ID, Latitude: p.Latitude, Longitude: p.Longitude, Distance: p.Distance}
+	results := tree.SearchNearbyWithLimit(req.GetLatitude(), req.GetLongitude(), int(req.GetLimit()))
+	riders := make([]*pb.RidersNearby, len(results))
+	for i, p := range results {
+		riders[i] = &pb.RidersNearby{RiderId: p.GetRiderId(), Latitude: p.GetLatitude(), Longitude: p.GetLongitude(), Distance: p.GetDistance()}
 	}
 
 	return &pb.ResponseNearby{Rider: riders}, nil
@@ -156,8 +149,8 @@ func (j *Jasmine) backupCache(filename string) error {
 }
 
 func (j *Jasmine) restoreCache(filename string) error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
+	j.mu.RLock()
+	defer j.mu.RUnlock()
 
 	file, err := os.Open(filename)
 	if err != nil {
